@@ -1,5 +1,4 @@
 import torch
-import torch.nn.functional as F # Using only for checking, will remove it later
 
 def dense_attention(Q, K, V, mask=None):
     d_k = Q.shape[-1]
@@ -16,41 +15,15 @@ def dense_attention(Q, K, V, mask=None):
 
     return output, weights
 
-torch.manual_seed(0)
 
-#example: batch=2, heads=2, seq_len=5, d_k=8
-batch, heads, seq_len, d_k = 2, 2, 5, 8
-Q = torch.randn(batch, heads, seq_len, d_k)
-K = torch.randn(batch, heads, seq_len, d_k)
-V = torch.randn(batch, heads, seq_len, d_k)
-
-#No mask
-my_output, my_weights = dense_attention(Q, K, V, mask=None)
-ref_output = F.scaled_dot_product_attention(Q, K, V, attn_mask=None)
-
-diff = (my_output - ref_output).abs().max().item()
-# print(f"Max difference (no mask): {diff:.8f}")
-# print("Match!" if diff < 1e-5 else "MISMATCH — something's wrong")
-
-#With a causal mask
-causal_mask = torch.triu(torch.ones(seq_len, seq_len), diagonal=1).bool()
-additive_mask = torch.zeros(seq_len, seq_len)
-additive_mask.masked_fill_(causal_mask, float('-inf'))
-
-my_output_causal, _ = dense_attention(Q, K, V, mask=additive_mask)
-ref_output_causal = F.scaled_dot_product_attention(Q, K, V, is_causal=True)
-
-diff_causal = (my_output_causal - ref_output_causal).abs().max().item()
-# print(f"Max difference (causal): {diff_causal:.8f}")
-# print("Match!" if diff_causal < 1e-5 else "MISMATCH")
 
 
 # Item 1.2
 
+#Patter 1 
 def sliding_window_mask(seq_len, window_size, causal=True):
-    # i, j will be (seq_len, seq_len) grids of rows and columns
-    i = torch.arange(seq_len).unsqueeze(1)  # shape (seq_len, 1)
-    j = torch.arange(seq_len).unsqueeze(0)  # shape (1, seq_len)
+    i = torch.arange(seq_len).unsqueeze(1) 
+    j = torch.arange(seq_len).unsqueeze(0) 
 
     distance = i - j
 
@@ -65,8 +38,74 @@ def sliding_window_mask(seq_len, window_size, causal=True):
 
 
 
-mask = sliding_window_mask(seq_len=8, window_size=2, causal=True)
 
-# Print it as a readable grid: "." = allowed, "X" = forbidden
-for row in mask:
-    print("".join("." if val == 0 else "X" for val in row))
+# Pattern 2: Big Bird
+def block_sparse_mask(seq_len, window_size, num_global, num_random, causal=True, seed=None):
+
+    if seed is not None:
+        torch.manual_seed(seed)
+
+    i = torch.arange(seq_len).unsqueeze(1)
+    j = torch.arange(seq_len).unsqueeze(0)
+    distance = i - j
+
+    #local window
+    if causal:
+        local = (distance >= 0) & (distance <= window_size)
+    else:
+        local = distance.abs() <= window_size
+
+    #global tokens
+    is_global = torch.zeros(seq_len, dtype=torch.bool)
+    is_global[:num_global] = True
+    global_allowed = is_global.unsqueeze(1) | is_global.unsqueeze(0)
+
+
+    #random connections
+    random_allowed = torch.zeros(seq_len, seq_len, dtype=torch.bool)
+    if num_random > 0:
+        for row in range(seq_len):
+            # If causal, only sample from valid preceding positions
+            valid_pool = torch.arange(row + 1) if causal else torch.arange(seq_len)
+            k = min(num_random, len(valid_pool))
+            if k > 0:
+                picked = valid_pool[torch.randperm(len(valid_pool))[:k]]
+                random_allowed[row, picked] = True
+
+
+
+    allowed = local | global_allowed | random_allowed
+
+    if causal:
+        causal_allowed = distance >= 0
+        allowed = allowed & causal_allowed
+
+    mask = torch.zeros(seq_len, seq_len)
+    mask.masked_fill_(~allowed, float('-inf'))
+    return mask
+
+
+
+
+
+
+# for testing
+
+
+def show_mask(mask):
+    for row in mask:
+        print("".join("." if val == 0 else "X" for val in row))
+    print()
+
+
+torch.manual_seed(0)
+
+sw = sliding_window_mask(8, 2)
+show_mask(sw)
+
+bs = block_sparse_mask(8, 1, 1, 1, seed=42)
+show_mask(bs)
+
+x = torch.randn(1, 2, 8, 16)
+out, _ = dense_attention(x, x, x, mask=bs)
+print("Output shape:", out.shape)
