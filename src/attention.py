@@ -1,8 +1,6 @@
 import torch
 import torch.nn.functional as F # Using only for checking, will remove it later
 
-import torch
-
 def dense_attention(Q, K, V, mask=None):
     d_k = Q.shape[-1]
 
@@ -31,8 +29,8 @@ my_output, my_weights = dense_attention(Q, K, V, mask=None)
 ref_output = F.scaled_dot_product_attention(Q, K, V, attn_mask=None)
 
 diff = (my_output - ref_output).abs().max().item()
-print(f"Max difference (no mask): {diff:.8f}")
-print("Match!" if diff < 1e-5 else "MISMATCH — something's wrong")
+# print(f"Max difference (no mask): {diff:.8f}")
+# print("Match!" if diff < 1e-5 else "MISMATCH — something's wrong")
 
 #With a causal mask
 causal_mask = torch.triu(torch.ones(seq_len, seq_len), diagonal=1).bool()
@@ -43,5 +41,32 @@ my_output_causal, _ = dense_attention(Q, K, V, mask=additive_mask)
 ref_output_causal = F.scaled_dot_product_attention(Q, K, V, is_causal=True)
 
 diff_causal = (my_output_causal - ref_output_causal).abs().max().item()
-print(f"Max difference (causal): {diff_causal:.8f}")
-print("Match!" if diff_causal < 1e-5 else "MISMATCH")
+# print(f"Max difference (causal): {diff_causal:.8f}")
+# print("Match!" if diff_causal < 1e-5 else "MISMATCH")
+
+
+# Item 1.2
+
+def sliding_window_mask(seq_len, window_size, causal=True):
+    # i, j will be (seq_len, seq_len) grids of rows and columns
+    i = torch.arange(seq_len).unsqueeze(1)  # shape (seq_len, 1)
+    j = torch.arange(seq_len).unsqueeze(0)  # shape (1, seq_len)
+
+    distance = i - j
+
+    if causal:
+        allowed = (distance >= 0) & (distance <= window_size)
+    else:
+        allowed = distance.abs() <= window_size
+
+    mask = torch.zeros(seq_len, seq_len)
+    mask.masked_fill_(~allowed, float('-inf'))
+    return mask
+
+
+
+mask = sliding_window_mask(seq_len=8, window_size=2, causal=True)
+
+# Print it as a readable grid: "." = allowed, "X" = forbidden
+for row in mask:
+    print("".join("." if val == 0 else "X" for val in row))
