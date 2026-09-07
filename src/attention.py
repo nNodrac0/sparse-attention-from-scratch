@@ -89,23 +89,3 @@ def block_sparse_mask(seq_len, window_size, num_global, num_random, causal=True,
 
 
 
-# for testing
-
-
-def show_mask(mask):
-    for row in mask:
-        print("".join("." if val == 0 else "X" for val in row))
-    print()
-
-
-torch.manual_seed(0)
-
-sw = sliding_window_mask(8, 2)
-show_mask(sw)
-
-bs = block_sparse_mask(8, 1, 1, 1, seed=42)
-show_mask(bs)
-
-x = torch.randn(1, 2, 8, 16)
-out, _ = dense_attention(x, x, x, mask=bs)
-print("Output shape:", out.shape)
